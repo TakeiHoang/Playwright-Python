@@ -42,7 +42,7 @@ jobs:
           pytest --collect-only
 
   # =========================================================================
-  # JOB 2: API Smoke Tests (Depends on Job 1)
+  # JOB 2: API Smoke Tests (0 Browsers, Pure REST HTTP)
   # =========================================================================
   api-smoke-gate:
     name: 2. API Smoke Gate
@@ -63,21 +63,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install Playwright (Core)
-        run: |
-          playwright install --with-deps chromium
-
       - name: Run API Smoke Tests
         run: |
           pytest -m "api and smoke"
 
   # =========================================================================
-  # JOB 3: UI Desktop Smoke Tests (Depends on Job 1)
+  # JOB 3: Multi-Browser UI Desktop Smoke (Chromium, Firefox, WebKit in parallel)
   # =========================================================================
-  ui-smoke-desktop-gate:
-    name: 3. UI Desktop Smoke Gate
+  ui-smoke-desktop-matrix:
+    name: "3. Desktop Smoke (${{ matrix.browser }})"
     needs: validate-code-integrity
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -93,29 +93,33 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install Playwright Chromium with OS Dependencies
+      - name: Install ${{ matrix.browser }} browser & OS dependencies
         run: |
-          playwright install --with-deps chromium
+          playwright install --with-deps ${{ matrix.browser }}
 
-      - name: Run UI Desktop Smoke Tests
+      - name: Run Desktop Smoke on ${{ matrix.browser }}
         run: |
-          pytest -m "ui and smoke and desktop"
+          pytest -m "ui and smoke and desktop" --browser ${{ matrix.browser }} -n auto
 
       - name: Upload Failure Screenshots
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-smoke-failures
+          name: desktop-smoke-${{ matrix.browser }}-failures
           path: artifacts/failures/
           if-no-files-found: ignore
 
   # =========================================================================
-  # JOB 4: UI Mobile Smoke Tests (Depends on Job 1)
+  # JOB 4: UI Mobile Smoke Tests (Chromium & WebKit emulation)
   # =========================================================================
   ui-smoke-mobile-gate:
-    name: 4. UI Mobile Smoke Gate
+    name: "4. Mobile Smoke (${{ matrix.browser }})"
     needs: validate-code-integrity
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -131,41 +135,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install Playwright Chromium with OS Dependencies
+      - name: Install ${{ matrix.browser }} browser & OS dependencies
         run: |
-          playwright install --with-deps chromium
+          playwright install --with-deps ${{ matrix.browser }}
 
-      - name: Run UI Mobile Smoke Tests
+      - name: Run UI Mobile Smoke Tests on ${{ matrix.browser }}
         run: |
-          pytest -m "ui and smoke and mobile"
+          pytest -m "ui and smoke and mobile" --browser ${{ matrix.browser }} -n auto
 
       - name: Upload Failure Screenshots
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: mobile-smoke-failures
+          name: mobile-smoke-${{ matrix.browser }}-failures
           path: artifacts/failures/
           if-no-files-found: ignore
 
   # =========================================================================
-  # JOB 5: Final Merge Protection Gatekeeper (Depends on Jobs 1, 2, 3 & 4)
+  # JOB 5: Final Merge Protection Gatekeeper (Depends on all gates)
   # =========================================================================
   main-merge-gatekeeper:
     name: 5. Main Merge Protection Gatekeeper
     needs:
       - validate-code-integrity
       - api-smoke-gate
-      - ui-smoke-desktop-gate
+      - ui-smoke-desktop-matrix
       - ui-smoke-mobile-gate
     runs-on: ubuntu-latest
     steps:
-      - name: Validate All Gatekeeper Checks Succeeded
+      - name: Validate All Cross-Browser Gates Succeeded
         run: |
-          echo "===================================================="
+          echo "========================================================="
           echo "All pre-merge verification checks passed successfully!"
           echo "- Code integrity & pytest collection: PASSED"
           echo "- Backend API smoke tests:            PASSED"
-          echo "- Frontend UI Desktop smoke tests:     PASSED"
-          echo "- Frontend UI Mobile smoke tests:      PASSED"
+          echo "- Desktop UI Smoke (Chrome, Firefox, WebKit): PASSED"
+          echo "- Mobile UI Smoke (Chromium, WebKit):         PASSED"
           echo "This branch is safe to merge into 'main'."
-          echo "===================================================="
+          echo "========================================================="

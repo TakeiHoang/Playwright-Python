@@ -143,6 +143,43 @@ pytest -m "ui and mobile" --device="iPhone 13"
 
 ---
 
+## 🌐 Multi-Browser Testing (Chrome, Firefox, WebKit)
+
+The framework dynamically launches tests across all 3 major Playwright browser engines:
+
+```bash
+# Run on Chromium (Google Chrome engine - default)
+pytest -m "ui and smoke" --browser chromium
+
+# Run on Firefox (Mozilla engine)
+pytest -m "ui and smoke" --browser firefox
+
+# Run on WebKit (Apple Safari engine)
+pytest -m "ui and smoke" --browser webkit
+
+# Run simultaneously across ALL 3 browser engines!
+pytest -m "ui and smoke" --browser chromium --browser firefox --browser webkit
+```
+
+---
+
+## ⚡ Multi-Worker Parallel Execution (`pytest-xdist`)
+
+Speed up test execution by distributing tests across multiple CPU workers:
+
+```bash
+# Run with 3 parallel workers
+pytest -m "ui and smoke" -n 3
+
+# Run on all 3 browsers simultaneously across 3 parallel workers
+pytest -m "ui and smoke" --browser chromium --browser firefox --browser webkit -n 3
+
+# Automatically scale workers to all available CPU cores
+pytest -m regression -n auto
+```
+
+---
+
 ## 🛠️ Convenience Runners
 
 ### PowerShell Script (`run_tests.ps1`)

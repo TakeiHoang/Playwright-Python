@@ -27,15 +27,13 @@ def pytest_addoption(parser):
     )
 
 @pytest.fixture(scope="session")
-def playwright_instance() -> Generator[Playwright, None, None]:
-    """Shared Playwright manager."""
-    with sync_playwright() as playwright:
-        yield playwright
-
-@pytest.fixture(scope="session")
-def browser_instance(playwright_instance: Playwright) -> Generator[Browser, None, None]:
-    """Shared Chromium browser instance launched in headless mode."""
-    browser = playwright_instance.chromium.launch(
+def browser_instance(playwright: Playwright, browser_name: str) -> Generator[Browser, None, None]:
+    """
+    Browser instance launched dynamically for the requested engine
+    (chromium, firefox, or webkit).
+    """
+    browser_type = getattr(playwright, browser_name)
+    browser = browser_type.launch(
         headless=settings.HEADLESS,
         slow_mo=settings.SLOW_MO,
     )
@@ -47,18 +45,17 @@ def desktop_context(browser_instance: Browser) -> Generator[BrowserContext, None
     """Browser context configured for desktop viewport."""
     context = browser_instance.new_context(
         viewport=settings.DESKTOP_VIEWPORT,
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     )
     yield context
     context.close()
 
 @pytest.fixture(scope="function")
-def mobile_context(playwright_instance: Playwright, browser_instance: Browser, request: pytest.FixtureRequest) -> Generator[BrowserContext, None, None]:
+def mobile_context(playwright: Playwright, browser_instance: Browser, request: pytest.FixtureRequest) -> Generator[BrowserContext, None, None]:
     """Browser context configured for mobile emulation."""
     device_opt = request.config.getoption("--device", default=None)
     device_name = device_opt if device_opt else settings.MOBILE_DEVICE_NAME
     
-    device_config = playwright_instance.devices.get(device_name, playwright_instance.devices.get("Pixel 5", {}))
+    device_config = playwright.devices.get(device_name, playwright.devices.get("Pixel 5", {}))
     context = browser_instance.new_context(**device_config)
     yield context
     context.close()
@@ -131,10 +128,10 @@ def authenticated_inventory_page(login_page: LoginPage, inventory_page: Inventor
 # API Testing Fixtures
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
-def api_request_context(playwright_instance: Playwright, request: pytest.FixtureRequest) -> Generator[APIRequestContext, None, None]:
+def api_request_context(playwright: Playwright, request: pytest.FixtureRequest) -> Generator[APIRequestContext, None, None]:
     """Shared Playwright APIRequestContext fixture."""
     base_url = request.config.getoption("--api-base-url") or settings.API_BASE_URL
-    context = playwright_instance.request.new_context(
+    context = playwright.request.new_context(
         base_url=base_url,
         extra_http_headers={
             "Accept": "application/json",
