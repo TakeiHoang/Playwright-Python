@@ -1,0 +1,200 @@
+name: Dependent Staged Test Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_regression:
+        description: 'Run comprehensive regression suite if smoke passes?'
+        type: boolean
+        required: true
+        default: true
+      device_mode:
+        description: 'Target device for UI tests'
+        type: choice
+        options:
+          - all
+          - desktop
+          - mobile
+        default: all
+  schedule:
+    # Nightly test run at 02:00 UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  # =========================================================================
+  # STAGE 1: Code Verification & Test Discovery
+  # =========================================================================
+  stage1_preflight:
+    name: "Stage 1: Pre-flight Verification"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Syntax & Structure Validation
+        run: |
+          python -m compileall config pages api tests
+          pytest --collect-only
+
+  # =========================================================================
+  # STAGE 2: API Smoke Tests (DEPENDS ON STAGE 1)
+  # =========================================================================
+  stage2_api_smoke:
+    name: "Stage 2: API Smoke Sanity"
+    needs: stage1_preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run API Smoke Tests
+        run: |
+          pytest -m "api and smoke"
+
+  # =========================================================================
+  # STAGE 3: UI Smoke Tests (DEPENDS ON STAGE 2 API SMOKE)
+  # UI tests only run if backend API sanity passes!
+  # =========================================================================
+  stage3_ui_smoke:
+    name: "Stage 3: UI Smoke (${{ matrix.device }})"
+    needs: stage2_api_smoke
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [desktop, mobile]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Filter Device Execution
+        id: filter
+        run: |
+          DEVICE_INPUT="${{ github.event.inputs.device_mode || 'all' }}"
+          if [ "$DEVICE_INPUT" != "all" ] && [ "$DEVICE_INPUT" != "${{ matrix.device }}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Python
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies & Playwright browser
+        if: steps.filter.outputs.skip != 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Execute UI Smoke Tests for ${{ matrix.device }}
+        if: steps.filter.outputs.skip != 'true'
+        run: |
+          pytest -m "ui and smoke and ${{ matrix.device }}"
+
+      - name: Upload Failure Screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-smoke-${{ matrix.device }}-failures
+          path: artifacts/failures/
+          if-no-files-found: ignore
+
+  # =========================================================================
+  # STAGE 4: Full Regression Suite (DEPENDS ON STAGE 3 UI SMOKE)
+  # Deep regression only executed if smoke suites pass
+  # =========================================================================
+  stage4_full_regression:
+    name: "Stage 4: Comprehensive Regression Suite"
+    needs: stage3_ui_smoke
+    if: github.event.inputs.run_regression != 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies & Playwright browser
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run Full Regression Suite (UI & API)
+        run: |
+          pytest -m regression
+
+      - name: Upload Regression Failure Screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-failures
+          path: artifacts/failures/
+          if-no-files-found: ignore
+
+  # =========================================================================
+  # STAGE 5: Pipeline Status & Report Consolidation (DEPENDS ON ALL PRIOR)
+  # =========================================================================
+  stage5_pipeline_summary:
+    name: "Stage 5: Pipeline Status Summary"
+    needs:
+      - stage1_preflight
+      - stage2_api_smoke
+      - stage3_ui_smoke
+      - stage4_full_regression
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate Overall Pipeline Result
+        run: |
+          echo "============================================="
+          echo "         STAGED PIPELINE SUMMARY             "
+          echo "============================================="
+          echo "Stage 1 (Pre-flight):      ${{ needs.stage1_preflight.result }}"
+          echo "Stage 2 (API Smoke):       ${{ needs.stage2_api_smoke.result }}"
+          echo "Stage 3 (UI Smoke):        ${{ needs.stage3_ui_smoke.result }}"
+          echo "Stage 4 (Full Regression): ${{ needs.stage4_full_regression.result }}"
+          echo "============================================="
+
+          # If any upstream stage failed or was cancelled, fail this summary step
+          if [ "${{ needs.stage1_preflight.result }}" != "success" ] || \
+             [ "${{ needs.stage2_api_smoke.result }}" != "success" ] || \
+             [ "${{ needs.stage3_ui_smoke.result }}" != "success" ] || \
+             ([ "${{ needs.stage4_full_regression.result }}" != "success" ] && [ "${{ needs.stage4_full_regression.result }}" != "skipped" ]); then
+            echo "One or more critical pipeline stages did not succeed."
+            exit 1
+          fi
+
+          echo "All enabled pipeline stages succeeded!"

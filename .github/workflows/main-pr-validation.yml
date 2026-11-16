@@ -1,0 +1,171 @@
+name: Main Branch Integrity & PR Gatekeeper
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # =========================================================================
+  # JOB 1: Code Integrity & Pytest Discovery (Fast Gate)
+  # =========================================================================
+  validate-code-integrity:
+    name: 1. Code Integrity & Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate Python Syntax & Bytecode Compilation
+        run: |
+          python -m compileall config pages api tests
+
+      - name: Verify Pytest Test Discovery
+        run: |
+          pytest --collect-only
+
+  # =========================================================================
+  # JOB 2: API Smoke Tests (Depends on Job 1)
+  # =========================================================================
+  api-smoke-gate:
+    name: 2. API Smoke Gate
+    needs: validate-code-integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright (Core)
+        run: |
+          playwright install --with-deps chromium
+
+      - name: Run API Smoke Tests
+        run: |
+          pytest -m "api and smoke"
+
+  # =========================================================================
+  # JOB 3: UI Desktop Smoke Tests (Depends on Job 1)
+  # =========================================================================
+  ui-smoke-desktop-gate:
+    name: 3. UI Desktop Smoke Gate
+    needs: validate-code-integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium with OS Dependencies
+        run: |
+          playwright install --with-deps chromium
+
+      - name: Run UI Desktop Smoke Tests
+        run: |
+          pytest -m "ui and smoke and desktop"
+
+      - name: Upload Failure Screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-failures
+          path: artifacts/failures/
+          if-no-files-found: ignore
+
+  # =========================================================================
+  # JOB 4: UI Mobile Smoke Tests (Depends on Job 1)
+  # =========================================================================
+  ui-smoke-mobile-gate:
+    name: 4. UI Mobile Smoke Gate
+    needs: validate-code-integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium with OS Dependencies
+        run: |
+          playwright install --with-deps chromium
+
+      - name: Run UI Mobile Smoke Tests
+        run: |
+          pytest -m "ui and smoke and mobile"
+
+      - name: Upload Failure Screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-smoke-failures
+          path: artifacts/failures/
+          if-no-files-found: ignore
+
+  # =========================================================================
+  # JOB 5: Final Merge Protection Gatekeeper (Depends on Jobs 1, 2, 3 & 4)
+  # =========================================================================
+  main-merge-gatekeeper:
+    name: 5. Main Merge Protection Gatekeeper
+    needs:
+      - validate-code-integrity
+      - api-smoke-gate
+      - ui-smoke-desktop-gate
+      - ui-smoke-mobile-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate All Gatekeeper Checks Succeeded
+        run: |
+          echo "===================================================="
+          echo "All pre-merge verification checks passed successfully!"
+          echo "- Code integrity & pytest collection: PASSED"
+          echo "- Backend API smoke tests:            PASSED"
+          echo "- Frontend UI Desktop smoke tests:     PASSED"
+          echo "- Frontend UI Mobile smoke tests:      PASSED"
+          echo "This branch is safe to merge into 'main'."
+          echo "===================================================="
